@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Piacenza - Realtà Aumentata</title>
+
+  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+
+  <script>
+    /* Testi delle schede informative (modificali qui) */
+    window.AR_TEXTS = {
+      ezechiele: {
+        title: "Profeta Ezechiele – Guercino",
+        body: "Paludato in una veste damascata, con corta barba, chiome ramate e un turbante elegantissimo, sostiene una tavola col suo nome in ebraico. È il solo profeta con lo sguardo rivolto a chi osserva. Accanto, un angioletto con il cartiglio “PORTA HAEC CLAVSA ERIT” (Ezechiele 44,2: “Questa porta resterà chiusa”), allusione alla verginità della Madonna."
+      }
+    };
+  </script>
+
+  <style>
+    html, body {
+      margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none;
+      touch-action: none; overscroll-behavior: none;
+    }
+
+    /* ---- Mirino di scansione con angoli bianchi ---- */
+    #scanner-overlay {
+      position: fixed; inset: 0; z-index: 10; pointer-events: none;
+      display: flex; justify-content: center; align-items: center;
+    }
+    .scan-frame { width: 78vw; height: 68vw; max-width: 420px; max-height: 370px; position: relative; }
+    .corner { position: absolute; width: 30px; height: 30px; border-color: #fff; border-style: solid; }
+    .top-left     { top: 0;    left: 0;  border-width: 5px 0 0 5px; }
+    .top-right    { top: 0;    right: 0; border-width: 5px 5px 0 0; }
+    .bottom-left  { bottom: 0; left: 0;  border-width: 0 0 5px 5px; }
+    .bottom-right { bottom: 0; right: 0; border-width: 0 5px 5px 0; }
+    .scan-line {
+      position: absolute; width: 100%; height: 2px; background: #fff; box-shadow: 0 0 8px #fff;
+      animation: scanAnim 2s ease-in-out infinite alternate;
+    }
+    @keyframes scanAnim { 0% { top: 5%; } 100% { top: 95%; } }
+    .hidden { display: none !important; }
+
+    #instruction-text {
+      position: fixed; bottom: calc(26px + env(safe-area-inset-bottom, 0px)); left: 50%;
+      transform: translateX(-50%); z-index: 20; pointer-events: none;
+      width: max-content; max-width: 92vw; text-align: center;
+      color: #fff; font-size: 15px; font-weight: 600; line-height: 1.3;
+      background: rgba(0,0,0,0.8); padding: 10px 20px; border-radius: 20px;
+    }
+    #title {
+      position: fixed; top: calc(14px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%);
+      z-index: 20; pointer-events: none; color: #fff; font-size: 17px; font-weight: 700;
+      background: rgba(0,0,0,0.75); padding: 9px 18px; border-radius: 18px; white-space: nowrap; display: none;
+    }
+    #title.show { display: block; }
+    #loading {
+      position: fixed; top: calc(62px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%);
+      z-index: 20; pointer-events: none; color: #fff; font-size: 13px; font-weight: 600;
+      background: rgba(0,0,0,0.75); padding: 8px 16px; border-radius: 16px; white-space: nowrap; display: none;
+    }
+    #loading.show { display: block; }
+    #reset {
+      position: fixed; top: calc(14px + env(safe-area-inset-top, 0px)); right: 12px; z-index: 25;
+      border: 0; border-radius: 18px; padding: 9px 14px; font-size: 13px; font-weight: 700;
+      background: rgba(255,255,255,0.92); color: #222; cursor: pointer; display: none;
+    }
+    #reset.show { display: block; }
+    #ver { position: fixed; left: 8px; bottom: calc(4px + env(safe-area-inset-bottom, 0px)); z-index: 20;
+           font-size: 10px; color: #fff; opacity: .45; pointer-events: none; }
+  </style>
+
+  <script>
+    /* ------------------------------------------------------------------
+       Scheda informativa in AR: disegnata su canvas e applicata come texture
+       kind: card (testo) | close (crocetta) | info (pulsante "i")
+       ------------------------------------------------------------------ */
+    AFRAME.registerComponent('ar-ui', {
+      schema: { kind: { type: 'string', default: 'card' }, title: { type: 'string', default: '' },
+                key: { type: 'string', default: '' }, body: { type: 'string', default: '' }, w: { type: 'number', default: 1024 }, h: { type: 'number', default: 640 } },
+      init: function () {
+        const self = this, d = this.data, RED = '#c62839';
+        const T = (window.AR_TEXTS && window.AR_TEXTS[d.key]) || { title: d.title, body: d.body };
+        function rr(g, x, y, w, h, r) {
+          g.beginPath(); g.moveTo(x + r, y); g.lineTo(x + w - r, y); g.arcTo(x + w, y, x + w, y + r, r);
+          g.lineTo(x + w, y + h - r); g.arcTo(x + w, y + h, x + w - r, y + h, r); g.lineTo(x + r, y + h);
+          g.arcTo(x, y + h, x, y + h - r, r); g.lineTo(x, y + r); g.arcTo(x, y, x + r, y, r); g.closePath();
+        }
+        function wrap(g, txt, maxW) {
+          const words = txt.split(' '), lines = []; let cur = '';
+          words.forEach((w) => {
+            const t = cur ? cur + ' ' + w : w;
+            if (g.measureText(t).width > maxW && cur) { lines.push(cur); cur = w; } else cur = t;
+          });
+          if (cur) lines.push(cur); return lines;
+        }
+        const FONT = '-apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+        function build() {
+          const W = d.w, H = d.h, c = document.createElement('canvas'); c.width = W; c.height = H;
+          const g = c.getContext('2d');
+          if (d.kind === 'card') {
+            g.fillStyle = '#ffffff'; rr(g, 10, 10, W - 20, H - 20, 56); g.fill();
+            g.lineWidth = 16; g.strokeStyle = RED; rr(g, 10, 10, W - 20, H - 20, 56); g.stroke();
+            g.textAlign = 'center'; g.textBaseline = 'alphabetic'; g.fillStyle = '#1d1d1d';
+            const maxW = W - 150, availH = H - 130;
+            let fs = 50, lines, titleFs, total;
+            for (; fs >= 24; fs -= 2) {
+              g.font = fs + 'px ' + FONT; lines = wrap(g, T.body, maxW);
+              titleFs = Math.round(fs * 1.12); total = titleFs * 1.5 + lines.length * fs * 1.3;
+              if (total <= availH) break;
+            }
+            let y = 62 + (availH - total) / 2 + titleFs;
+            g.font = 'bold ' + titleFs + 'px ' + FONT; g.fillStyle = RED; g.fillText(T.title, W / 2, y);
+            y += titleFs * 0.5; g.font = fs + 'px ' + FONT; g.fillStyle = '#1d1d1d';
+            lines.forEach((ln) => { y += fs * 1.3; g.fillText(ln, W / 2, y); });
+          } else if (d.kind === 'close') {
+            g.fillStyle = '#ffffff'; g.beginPath(); g.arc(W / 2, H / 2, W / 2 - 6, 0, 7); g.fill();
+            g.lineWidth = 14; g.strokeStyle = RED; g.stroke();
+            g.lineWidth = 26; g.lineCap = 'round'; const a = W * 0.28;
+            g.beginPath(); g.moveTo(a, a); g.lineTo(W - a, H - a); g.moveTo(W - a, a); g.lineTo(a, H - a); g.stroke();
+          } else {
+            g.fillStyle = RED; g.beginPath(); g.arc(W / 2, H / 2, W / 2 - 6, 0, 7); g.fill();
+            g.lineWidth = 14; g.strokeStyle = '#fff'; g.stroke();
+            g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle';
+            g.font = 'bold ' + Math.round(W * 0.62) + 'px Georgia, serif'; g.fillText('i', W / 2, H / 2 + W * 0.04);
+          }
+          const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4; return tex;
+        }
+        const apply = function () {
+          const mesh = self.el.getObject3D('mesh');
+          if (!mesh || self._done) return; self._done = true;
+          mesh.material.map = build(); mesh.material.transparent = true; mesh.material.needsUpdate = true;
+        };
+        this.el.addEventListener('object3dset', apply); apply();
+      }
+    });
+
+    AFRAME.registerComponent('ar-piacenza', {
+      init: function () {
+        const sceneEl = this.el;
+        const $ = (id) => document.getElementById(id);
+        const frame = $('scan-frame'), text = $('instruction-text'), title = $('title'),
+              loading = $('loading'), resetBtn = $('reset');
+
+        // Un elemento per ogni foto: l'indice è quello dell'ordine in cui sono state compilate in targets.mind
+        const ITEMS = [
+          { target: 'target-0', model: 'model-0', pivot: 'pivot-0', url: './afarnese.glb',  name: 'Alessandro Farnese', rotY0: -0.5 },
+          { target: 'target-1', model: 'model-1', pivot: 'pivot-1', url: './ezechiele.glb', name: 'Ezechiele', rotY0: 0 },
+          { target: 'target-2', model: 'model-2', pivot: 'pivot-2', url: './gotico.glb',    name: 'Palazzo Gotico', rotY0: 0 }
+        ];
+
+        const TXT_SCAN  = "Inquadra una delle foto per vedere il modello 3D";
+        const TXT_FOUND = "Trascina per ruotare · pizzica per ingrandire";
+        const MIN_K = 0.5, MAX_K = 3;
+
+        let current = -1;
+        const apply0 = (it) => { it.pivotEl.object3D.rotation.set(it.rotX, it.rotY, 0); };
+        ITEMS.forEach((it, i) => {
+          it.el = $(it.target); it.modelEl = $(it.model); it.pivotEl = $(it.pivot);
+          it.loaded = false; it.started = false; it.k = 1; it.rotX = 0; it.rotY = it.rotY0;
+
+          // il modello viene scaricato solo la prima volta che la sua foto viene inquadrata (risparmia dati)
+          it.modelEl.addEventListener('model-loaded', () => {
+            it.loaded = true;
+            it.modelEl.object3D.traverse((o) => {
+              if (o.isMesh && o.material) {
+                if (o.material.map) o.material.map.anisotropy = 4;
+                o.material.side = THREE.DoubleSide; o.material.needsUpdate = true;
+              }
+            });
+            if (current === i) { loading.classList.remove('show'); text.innerText = TXT_FOUND; }
+          });
+          it.modelEl.addEventListener('model-error', () => {
+            if (current === i) { loading.innerText = "Impossibile caricare il modello 3D"; }
+          });
+
+          it.el.addEventListener('targetFound', () => {
+            current = i;
+            apply0(it);
+            if (!it.started) { it.started = true; it.modelEl.setAttribute('gltf-model', it.url); }
+            frame.classList.add('hidden');
+            title.innerText = it.name; title.classList.add('show');
+            resetBtn.classList.add('show');
+            if (it.loaded) { loading.classList.remove('show'); text.innerText = TXT_FOUND; }
+            else { loading.innerText = "Caricamento modello 3D…"; loading.classList.add('show'); text.innerText = TXT_FOUND; }
+          });
+          it.el.addEventListener('targetLost', () => {
+            if (current !== i) return;      // un'altra foto è già stata riconosciuta: non toccare l'interfaccia
+            current = -1;
+            frame.classList.remove('hidden');
+            title.classList.remove('show'); loading.classList.remove('show'); resetBtn.classList.remove('show');
+            text.innerText = TXT_SCAN;
+          });
+        });
+
+        // ---------- scheda informativa di Ezechiele (indice 1) ----------
+        const cardGroup = $('card-group'), infoBtn = $('info-btn');
+        let infoOpen = true;
+        function showInfo() {
+          const on = (current === 1);
+          cardGroup.setAttribute('visible', on && infoOpen);
+          infoBtn.setAttribute('visible', on && !infoOpen);
+          if (on && infoOpen) {
+            cardGroup.setAttribute('scale', '0.01 0.01 0.01');
+            cardGroup.setAttribute('animation__pop', { property: 'scale', from: '0.01 0.01 0.01', to: '1 1 1', dur: 380, easing: 'easeOutBack' });
+          }
+        }
+        ITEMS[1].el.addEventListener('targetFound', showInfo);
+        ITEMS[1].el.addEventListener('targetLost', () => {
+          cardGroup.setAttribute('visible', false); infoBtn.setAttribute('visible', false);
+        });
+        const hitClose = $('hit-close'), hitInfo = $('hit-info');
+        function tapAt(x, y) {
+          if (current !== 1) return;
+          const camera = sceneEl.camera; if (!camera) return;
+          const els = infoOpen ? [hitClose] : [hitInfo];
+          const ndc = new THREE.Vector2((x / innerWidth) * 2 - 1, -(y / innerHeight) * 2 + 1);
+          const rc = new THREE.Raycaster(); rc.setFromCamera(ndc, camera);
+          let hit = rc.intersectObjects(els.map(e => e.object3D), true).length > 0;
+          if (!hit) {                                   // "calamita": tocco impreciso entro 70 px
+            const v = new THREE.Vector3(); els[0].object3D.getWorldPosition(v); v.project(camera);
+            hit = Math.hypot((v.x + 1) / 2 * innerWidth - x, (1 - v.y) / 2 * innerHeight - y) < 70;
+          }
+          if (!hit) return;
+          infoOpen = !infoOpen; showInfo();
+        }
+
+        // ---------- gesti: 1 dito = ruota, 2 dita = zoom (sul modello attivo) ----------
+        const ptrs = new Map();
+        let lastDist = 0;
+        const apply = (it) => {
+          it.pivotEl.object3D.rotation.set(it.rotX, it.rotY, 0);
+          it.pivotEl.object3D.scale.set(it.k, it.k, it.k);
+        };
+        const dist = () => { const a = [...ptrs.values()]; return Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y); };
+
+        window.addEventListener('pointerdown', (e) => {
+          if (e.target.closest && e.target.closest('button')) return;
+          ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t: Date.now(), multi: ptrs.size > 0 });
+          if (ptrs.size === 2) { lastDist = dist(); ptrs.forEach((q) => { q.multi = true; }); }
+        });
+        window.addEventListener('pointermove', (e) => {
+          const p = ptrs.get(e.pointerId);
+          if (!p || current < 0) return;
+          const it = ITEMS[current];
+          if (ptrs.size === 1) {
+            it.rotY += (e.clientX - p.x) * 0.012;
+            it.rotX = Math.max(-0.9, Math.min(0.9, it.rotX + (e.clientY - p.y) * 0.012));
+            p.x = e.clientX; p.y = e.clientY;
+          } else if (ptrs.size === 2) {
+            p.x = e.clientX; p.y = e.clientY;
+            const d = dist();
+            if (lastDist > 0) it.k = Math.max(MIN_K, Math.min(MAX_K, it.k * d / lastDist));
+            lastDist = d;
+          }
+          apply(it);
+        });
+        const up = (e) => {
+          const p = ptrs.get(e.pointerId);
+          if (e.type === 'pointerup' && p && !p.multi && Date.now() - p.t < 500 &&
+              Math.hypot(e.clientX - p.sx, e.clientY - p.sy) < 12) tapAt(e.clientX, e.clientY);
+          ptrs.delete(e.pointerId); lastDist = 0;
+        };
+        window.addEventListener('pointerup', up);
+        window.addEventListener('pointercancel', up);
+
+        resetBtn.addEventListener('click', () => {
+          if (current < 0) return;
+          const it = ITEMS[current]; it.k = 1; it.rotX = 0; it.rotY = it.rotY0; apply(it);
+        });
+      }
+    });
+  </script>
+</head>
+<body>
+
+  <div id="scanner-overlay">
+    <div class="scan-frame" id="scan-frame">
+      <div class="corner top-left"></div>
+      <div class="corner top-right"></div>
+      <div class="corner bottom-left"></div>
+      <div class="corner bottom-right"></div>
+      <div class="scan-line"></div>
+    </div>
+  </div>
+  <div id="title"></div>
+  <div id="loading">Caricamento modello 3D…</div>
+  <div id="instruction-text">Inquadra una delle foto per vedere il modello 3D</div>
+  <button id="reset" type="button">Ripristina</button>
+  <div id="ver">v3</div>
+
+  <a-scene
+    ar-piacenza
+    gltf-model="dracoDecoderPath: https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/libs/draco/gltf/"
+    mindar-image="imageTargetSrc: ./targets.mind; maxTrack: 1; uiScanning: no; filterMinCF: 0.0001; filterBeta: 0.001; missTolerance: 15; warmupTolerance: 5;"
+    color-space="sRGB"
+    renderer="colorManagement: true"
+    vr-mode-ui="enabled: false"
+    device-orientation-permission-ui="enabled: false">
+
+    <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+
+    <!-- luci -->
+    <a-entity light="type: ambient; color: #ffffff; intensity: 0.55"></a-entity>
+    <a-entity light="type: directional; color: #fffaf0; intensity: 0.9" position="0.6 1.2 1.5"></a-entity>
+    <a-entity light="type: hemisphere; color: #ffffff; groundColor: #9a8c7a; intensity: 0.35"></a-entity>
+
+    <!-- 0 · Alessandro Farnese (foto verticale 3:4: larghezza 1, altezza 1.33) -->
+    <a-entity id="target-0" mindar-image-target="targetIndex: 0">
+      <a-entity position="0 0 0.2" animation="property: rotation; from: 0 -10 0; to: 0 10 0; dir: alternate; dur: 5000; easing: easeInOutSine; loop: true">
+        <a-entity id="pivot-0"><a-entity id="model-0" scale="0.52 0.52 0.52"></a-entity></a-entity>
+      </a-entity>
+    </a-entity>
+
+    <!-- 1 · Ezechiele (foto quasi quadrata: larghezza 1, altezza 1.05): modello in alto + scheda informativa sotto -->
+    <a-entity id="target-1" mindar-image-target="targetIndex: 1">
+      <a-entity position="0 0.14 0.15" animation="property: rotation; from: 0 -10 0; to: 0 10 0; dir: alternate; dur: 5000; easing: easeInOutSine; loop: true">
+        <a-entity id="pivot-1"><a-entity id="model-1" scale="0.42 0.42 0.42"></a-entity></a-entity>
+      </a-entity>
+
+      <!-- scheda (con crocetta per chiuderla) -->
+      <a-entity id="card-group" position="0 -0.57 0.1" visible="false">
+        <a-plane width="0.96" height="0.6" material="shader: flat; transparent: true; color: #ffffff"
+                 ar-ui="kind: card; w: 1024; h: 640; key: ezechiele"></a-plane>
+        <a-plane position="0.45 0.29 0.01" width="0.14" height="0.14" material="shader: flat; transparent: true; color: #ffffff"
+                 ar-ui="kind: close; w: 256; h: 256"></a-plane>
+        <a-plane id="hit-close" position="0.45 0.29 0.03" width="0.26" height="0.26" material="transparent: true; opacity: 0; side: double"></a-plane>
+      </a-entity>
+
+      <!-- pulsante "i" (compare quando la scheda è chiusa) -->
+      <a-entity id="info-btn" position="0 -0.5 0.1" visible="false">
+        <a-plane width="0.16" height="0.16" material="shader: flat; transparent: true; color: #ffffff"
+                 ar-ui="kind: info; w: 256; h: 256"></a-plane>
+        <a-plane id="hit-info" position="0 0 0.02" width="0.3" height="0.3" material="transparent: true; opacity: 0; side: double"></a-plane>
+      </a-entity>
+    </a-entity>
+
+    <!-- 2 · Palazzo Gotico (foto orizzontale: larghezza 1, altezza 0.66) -->
+    <a-entity id="target-2" mindar-image-target="targetIndex: 2">
+      <a-entity position="0 0 0.2" animation="property: rotation; from: 0 -10 0; to: 0 10 0; dir: alternate; dur: 5000; easing: easeInOutSine; loop: true">
+        <a-entity id="pivot-2"><a-entity id="model-2" scale="0.46 0.46 0.46"></a-entity></a-entity>
+      </a-entity>
+    </a-entity>
+
+  </a-scene>
+
+</body>
+</html>
